@@ -18,6 +18,12 @@ FLAG =          pygame.image.load('mines/unrevealed/flag.png')
 QM =            pygame.image.load('mines/unrevealed/q.png')
 QM_PRESSED =    pygame.image.load('mines/unrevealed/q-pressed.png')
 
+DEFEAT =        pygame.image.load('mines/moods/defeat.png')
+HAPPY =         pygame.image.load('mines/moods/happy.png')
+HAPPY_PRESSED = pygame.image.load('mines/moods/happy-pressed.png')
+SURPRISED =     pygame.image.load('mines/moods/surprised.png')
+VICTORY =       pygame.image.load('mines/moods/victory.png')
+
 ZERO =  pygame.image.load('mines/revealed/0.png')
 ONE =   pygame.image.load('mines/revealed/1.png')
 TWO =   pygame.image.load('mines/revealed/2.png')
@@ -35,6 +41,11 @@ MINE_FALSE =   pygame.image.load('mines/revealed/mine-false.png')
 MINE_PRESSED = pygame.image.load('mines/revealed/mine-pressed.png')
 
 # revealed_safes = 0
+
+def in_coords(mouse, top_left, x_len, y_len):
+    in_x = mouse[0] >= top_left[0] and mouse[0] < top_left[0] + x_len
+    in_y = mouse[1] >= top_left[1] and mouse[1] < top_left[1] + y_len
+    return in_x and in_y
 
 # counts every board elmt vert/horiz/diag adjacent to (i, j) (IN SQUARE BOARD) 
 # and returns for how many [lam elt] is True
@@ -114,6 +125,10 @@ class Button(ABC):
     def click(self):
         pass
 
+    @abstractmethod
+    def draw(self):
+        pass
+
 
 class Tile(Button, ABC):
     def __init__(self, p):
@@ -161,6 +176,14 @@ class MineTile(Tile):
         if self.img != FLAG:
             self.img = MINE
         self.revealed = True
+    
+    def reveal_pos(self):
+        '''version of reveal() for victory'''
+        if self.revealed:
+            return
+        if self.img != FLAG:
+            self.img = FLAG
+        self.revealed = True
 
     def l_click(self):
         '''never call directly (will not check for revealed)'''
@@ -173,7 +196,7 @@ class MineTile(Tile):
             self.revealed = True
             print("GAME OVER: LOSS")
             return -1
-    
+
     def click(self, pressed, board):
         '''note: [board] is only here so that this has the same #args as
         [SafeTile.click()]'''
@@ -236,12 +259,47 @@ class SafeTile(Tile):
         elif pressed == 3:
             return self.r_click()
 
-# class RestartButton(Button):
-#     None
-    # define right-click as an empty return for this button
+class RestartButton(Button):
+    def __init__(self, x, x_buf, y_buf):
+        self.size = 26
+        self.pos = ((16 * x + x_buf - self.size / 2) / 2, (y_buf - self.size) / 2)
+        self.img = HAPPY
+
+    def set_face(self, condition):
+        '''conditions: 'happy', 'pressed', 'victory', 'defeat\''''
+        if condition == 'happy':
+            self.img = HAPPY
+            return 0
+        elif condition == 'pressed':
+            self.img = HAPPY_PRESSED
+            return 0
+        elif condition == 'victory':
+            self.img = VICTORY
+            return 0
+        elif condition == 'defeat':
+            self.img = DEFEAT
+            return 0
+        else:
+            return -1
+        
+
+    def l_click(self, board):
+        self.set_face(0)
+        return 1000 # return code of 1000 means reset board
+
+    def r_click(self):
+        return 0
+
+    def click(self, pressed, board):
+        if pressed == 1:
+            return self.l_click(board)
+
+    def draw(self, surface):
+        surface.blit(self.img, self.pos)
 
 class Board:
     def __init__(self, x, y, ms, x_buf, y_buf):
+        self.finished = False
         self.x_ax = x
         self.y_ax = y
         self.mines = ms
@@ -249,6 +307,7 @@ class Board:
         self.draob = np.transpose(self.board)
         self.revealed_safes = 0
         self.safes = 0
+        self.restart = RestartButton(x, x_buf, y_buf)
         self.tileses = [[] for _ in range(x)]
         for x in range(len(self.draob)):
             for y in range(len(self.draob[x])):
@@ -257,7 +316,7 @@ class Board:
                 else:
                     self.tileses[x] += [SafeTile((16 * x + x_buf, 16 * y + y_buf), self.draob[x, y])] # add safe
                     self.safes += 1
-    
+
     def board_click(self, x, y, button):
         if x > -1 and y > -1 and x < self.x_ax and y < self.y_ax:
             keys_pressed = pygame.key.get_pressed()
@@ -271,7 +330,8 @@ class Board:
                 new_ret = click_over_adj_rec(x, y, self)
             if ret == 2:
                 # True if #flags around SafeTile == #mines around SafeTile
-                flags_mines_eq = over_adj(x, y, self.tileses, lambda t : t.img == FLAG) == self.tileses[x][y].mine_num
+                ov_ad = over_adj(x, y, self.tileses, lambda t : t.img == FLAG)
+                flags_mines_eq = ov_ad == self.tileses[x][y].mine_num
                 if flags_mines_eq:
                     new_ret = click_over_adj_rec(x, y, self)
             if ret == -1 or new_ret == -1:
@@ -279,14 +339,24 @@ class Board:
                 for i in range(self.x_ax):
                     for j in range(self.y_ax):
                         self.tileses[i][j].reveal()
+                self.restart.set_face('defeat')
 
     def is_finished(self):
-        return self.revealed_safes == self.safes
+        fin = self.revealed_safes == self.safes
+        if fin and not self.finished:
+            for i in range(self.x_ax):
+                for j in range(self.y_ax):
+                    if self.board[j][i] == -1:
+                        self.tileses[i][j].reveal_pos()
+            print('GAME OVER: VICTORY')
+            self.finished = True
+        return fin
 
     def draw(self, surf):
         for tiles in self.tileses:
             for tile in tiles:
                 tile.draw(surf)
+        self.restart.draw(surf)
 
 def main():
     pygame.init()
@@ -294,34 +364,31 @@ def main():
     pygame.display.set_icon(logo)
     pygame.display.set_caption("basic display")
 
-    # X_AX = 16
-    # Y_AX = 16
-    # TOTAL_MINES = 40
-
     diff = INTERMEDIATE
 
-    X_AX = diff[0]
-    Y_AX = diff[1]
-    TOTAL_MINES = diff[2]
+    x_ax = diff[0]
+    y_ax = diff[1]
+    total_mines = diff[2]
 
     DARK_GREY = (65, 65, 65)
     GREY = (100, 100, 100)
 
     X_BUF = 10
-    Y_BUF = 10
-    DISPLAYSURF = pygame.display.set_mode((X_AX * 16 + 2 * X_BUF, Y_AX * 16 + 2 * Y_BUF))
+    Y_BUF = 50
+    DISPLAYSURF = pygame.display.set_mode((x_ax * 16 + 2 * X_BUF, y_ax * 16 + 2 * Y_BUF))
     DISPLAYSURF.fill(GREY)
     FPS = pygame.time.Clock()
     FPS.tick(60)
-    
-    board = Board(X_AX, Y_AX, TOTAL_MINES, X_BUF, Y_BUF)
+
+    board = Board(x_ax, y_ax, total_mines, X_BUF, Y_BUF)
+    # board = Board(x_ax, y_ax, 10, X_BUF, Y_BUF)
     # print(board)
     # BOARD INDEX (i, j) MAPS TO TILESES INDEX (j, i) BECAUSE OTHERWISE YOU'D BE
     # INDEXING TILES BY (y, x) (I think? that might make absolutely zero sense)
     # okay transposed the board so hopefully everything is okay now
     # draob = np.transpose(board)
     # print(draob)
-    
+
 
     # global revealed_safes
     # revealed_safes = 0
@@ -332,6 +399,7 @@ def main():
     while True:
         for event in pygame.event.get():
             rel_pos = (-1, -1)
+            pos = (-1, -1)
             # pressed = tuple()
             if event.type == QUIT:
                 pygame.quit()
@@ -342,13 +410,19 @@ def main():
                 rel_pos = (int((pos[0] - X_BUF) / 16), int((pos[1] - Y_BUF) / 16))
 
             # TODO: add restart button
-
+            if pos != (-1, -1):
+                if in_coords(pos, board.restart.pos, board.restart.size, board.restart.size):
+                    ret = board.restart.click(event.button, board)
+                    if ret == 1000:
+                        board = Board(x_ax, y_ax, total_mines, X_BUF, Y_BUF)
             x, y = rel_pos[0], rel_pos[1]
             if rel_pos != (-1, -1):
                 board.board_click(x, y, event.button)
 
             if board.is_finished():
-                print("GAME OVER: VICTORY")
+                # print("GAME OVER: VICTORY")
+                board.restart.set_face('victory')
+                
                 # pygame.quit()
                 # sys.exit()
 
